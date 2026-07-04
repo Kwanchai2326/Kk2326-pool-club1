@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2D Pool Club Arcade - Bug Fixed</title>
+    <style>
+        body {
+            background-color: #111827;
+            color: #ffffff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 10px;
+        }
+
+        h1 {
+            color: #10b981;
+            margin: 0;
+            font-size: 28px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        .hud {
+            display: flex;
+            gap: 40px;
+            background: #1f2937;
+            padding: 10px 30px;
+            border-radius: 30px;
+            border: 2px solid #374151;
+            margin-bottom: 15px;
+            font-weight: bold;
+            font-size: 18px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+        }
+
+        .score { color: #34d399; }
+        .time { color: #f87171; }
+
+        #gameCanvas {
+            background: #064e3b; 
+            border: 16px solid #78350f; 
+            border-radius: 8px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+            cursor: crosshair;
+        }
+
+        .controls {
+            margin-top: 15px;
+            color: #9ca3af;
+            font-size: 14px;
+            text-align: center;
+            max-width: 500px;
+        }
+
+        .btn {
+            background-color: #10b981;
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            font-size: 16px;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-top: 15px;
+            display: none;
+            text-transform: uppercase;
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+        }
+
+        .btn:hover { background-color: #059669; }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1>🎱 POOL CLUB</h1>
+    </div>
+
+    <div class="hud">
+        <div>SCORE: <span id="score" class="score">0</span></div>
+        <div>⏱️ TIME: <span id="timer" class="time">180s</span></div>
+    </div>
+
+    <canvas id="gameCanvas" width="800" height="400"></canvas>
+
+    <div id="instructions" class="controls">
+        Drag backward from the ⚪ <b>White Cue Ball</b> to aim and set power, then release to shoot. Clear all the colored balls!
+    </div>
+    <button id="restartBtn" class="btn" onclick="resetGame()">Play Again 🔄</button>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        const scoreTxt = document.getElementById('score');
+        const timerTxt = document.getElementById('timer');
+        const instructions = document.getElementById('instructions');
+        const restartBtn = document.getElementById('restartBtn');
+
+        let score = 0;
+        let timeLeft = 180; 
+        let gameActive = true;
+        let timerInterval;
+        const friction = 0.985; 
+
+        // 🛠️ ขยายขนาดหลุมเพิ่มขึ้น (ขยายรัศมีจาก 24/20 เป็น 35/30 เพื่อให้ลงง่ายขึ้นมาก)
+        const pockets = [
+            { x: 0, y: 0, radius: 35 },
+            { x: 400, y: -5, radius: 30 },
+            { x: 800, y: 0, radius: 35 },
+            { x: 0, y: 400, radius: 35 },
+            { x: 400, y: 405, radius: 30 },
+            { x: 800, y: 400, radius: 35 }
+        ];
+
+        const ballRadius = 12;
+        let balls = [];
+        let cueBall;
+
+        let isDragging = false;
+        let mouseX = 0;
+        let mouseY = 0;
+
+        class Ball {
+            constructor(x, y, color, isCue = false, number = "") {
+                this.x = x;
+                this.y = y;
+                this.vx = 0;
+                this.vy = 0;
+                this.radius = ballRadius;
+                this.color = color;
+                this.isCue = isCue;
+                this.number = number;
+                this.active = true;
+            }
+
+            update() {
+                if (!this.active) return;
+
+                this.x += this.vx;
+                this.y += this.vy;
+
+                this.vx *= friction;
+                this.vy *= friction;
+
+                if (Math.hypot(this.vx, this.vy) < 0.08) {
+                    this.vx = 0;
+                    this.vy = 0;
+                }
+
+                if (this.x < this.radius) { this.x = this.radius; this.vx *= -0.8; }
+                if (this.x > canvas.width - this.radius) { this.x = canvas.width - this.radius; this.vx *= -0.8; }
+                if (this.y < this.radius) { this.y = this.radius; this.vy *= -0.8; }
+                if (this.y > canvas.height - this.radius) { this.y = canvas.height - this.radius; this.vy *= -0.8; }
+
+                pockets.forEach(pocket => {
+                    if (Math.hypot(this.x - pocket.x, this.y - pocket.y) < pocket.radius - 2) {
+                        this.pocketed();
+                    }
+                });
+            }
+
+            draw() {
+                if (!this.active) return;
+
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+                ctx.closePath();
+
+                if (!this.isCue) {
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.radius / 2, 0, Math.PI * 2);
+                    ctx.fillStyle = "#ffffff";
+                    ctx.fill();
+                    ctx.closePath();
+
+                    ctx.fillStyle = "#000000";
+                    ctx.font = "bold 9px Arial";
+                    ctx.textAlign = "center";
+                    ctx.textBaseline = "middle";
+                    ctx.fillText(this.number, this.x, this.y);
+                }
+            }
+
+            pocketed() {
+                // 🛠️ แก้บั๊ก: รีเซ็ตความเร็วของลูกที่ลงหลุมให้เป็น 0 ทันที เพื่อไม่ให้ระบบค้าง
+                this.vx = 0;
+                this.vy = 0;
+
+                if (this.isCue) {
+                    this.x = 200; this.y = 200; 
+                    score = Math.max(0, score - 50);
+                    scoreTxt.textContent = score;
+                } else {
+                    this.active = false;
+                    score += 100;
+                    scoreTxt.textContent = score;
+                    checkWinCondition();
+                }
+            }
+        }
+
+        function spawnBalls() {
+            balls = [];
+            cueBall = new Ball(200, 200, "#ffffff", true);
+            balls.push(cueBall);
+
+            const startX = 550;
+            const startY = 200;
+            const colors = ["#fbbf24", "#3b82f6", "#ef4444", "#8b5cf6", "#f97316", "#10b981", "#7f1d1d", "#111827", "#f472b6", "#06b6d4"];
+            let count = 1;
+
+            for (let i = 0; i < 4; i++) {
+                let x = startX + i * (ballRadius * 2 - 1);
+                let colStartY = startY - i * ballRadius;
+                for (let j = 0; j <= i; j++) {
+                    let y = colStartY + j * (ballRadius * 2 + 2);
+                    let color = (count === 5) ? "#111827" : colors[count % colors.length];
+                    balls.push(new Ball(x, y, color, false, count));
+                    count++;
+                }
+            }
+        }
+
+        function handleBallCollisions() {
+            for (let i = 0; i < balls.length; i++) {
+                for (let j = i + 1; j < balls.length; j++) {
+                    let b1 = balls[i];
+                    let b2 = balls[j];
+
+                    if (!b1.active || !b2.active) continue;
+
+                    let dist = Math.hypot(b2.x - b1.x, b2.y - b1.y);
+                    if (dist < b1.radius + b2.radius) {
+                        let overlap = (b1.radius + b2.radius) - dist;
+                        let nx = (b2.x - b1.x) / dist;
+                        let ny = (b2.y - b1.y) / dist;
+
+                        b1.x -= nx * overlap * 0.5;
+                        b1.y -= ny * overlap * 0.5;
+                        b2.x += nx * overlap * 0.5;
+                        b2.y += ny * overlap * 0.5;
+
+                        let kx = b1.vx - b2.vx;
+                        let ky = b1.vy - b2.vy;
+                        let p = 2 * (nx * kx + ny * ky) / 2;
+
+                        b1.vx -= p * nx;
+                        b1.vy -= p * ny;
+                        b2.vx += p * nx;
+                        b2.vy += p * ny;
+                    }
+                }
+            }
+        }
+
+        // 🛠️ ฟังก์ชันนี้จะเช็คเฉพาะลูกที่ยังเล่นอยู่ (active) เท่านั้น ป้องกันการค้างจากลูกที่ลงหลุมไปแล้ว
+        function isTableMotionless() {
+            return balls.every(b => !b.active || (b.vx === 0 && b.vy === 0));
+        }
+
+        canvas.addEventListener('mousedown', (e) => {
+            if (!gameActive || !isTableMotionless()) return;
+            
+            const rect = canvas.getBoundingClientRect();
+            let clickX = e.clientX - rect.left;
+            let clickY = e.clientY - rect.top;
+
+            if (Math.hypot(clickX - cueBall.x, clickY - cueBall.y) < cueBall.radius + 15) {
+                isDragging = true;
+            }
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            mouseX = e.clientX - rect.left;
+            mouseY = e.clientY - rect.top;
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (!isDragging) return;
+            isDragging = false;
+
+            let dx = cueBall.x - mouseX;
+            let dy = cueBall.y - mouseY;
+            
+            let power = Math.min(Math.hypot(dx, dy) * 0.12, 16);
+            let angle = Math.atan2(dy, dx);
+
+            cueBall.vx = Math.cos(angle) * power;
+            cueBall.vy = Math.sin(angle) * power;
+        });
+
+        function startTimer() {
+            timerInterval = setInterval(() => {
+                if (timeLeft > 0 && gameActive) {
+                    timeLeft--;
+                    timerTxt.textContent = timeLeft + 's';
+                } else {
+                    endGame("🚨 TIME'S UP! Game Over.");
+                }
+            }, 1000);
+        }
+
+        function checkWinCondition() {
+            let remaining = balls.filter(b => !b.isCue && b.active);
+            if (remaining.length === 0) {
+                endGame("🏆 CHAMPION! Table Cleared.");
+            }
+        }
+
+        function endGame(msg) {
+            gameActive = false;
+            clearInterval(timerInterval);
+            instructions.innerHTML = `<span style='color:#ef4444; font-weight:bold; font-size:16px;'>${msg}</span><br>Final Score: ${score}`;
+            restartBtn.style.display = 'inline-block';
+        }
+
+        function resetGame() {
+            score = 0;
+            timeLeft = 180; 
+            gameActive = true;
+            scoreTxt.textContent = score;
+            timerTxt.textContent = timeLeft + 's';
+            instructions.innerHTML = "Drag backward from the ⚪ <b>White Cue Ball</b> to aim and set power, then release to shoot. Clear all the colored balls!";
+            restartBtn.style.display = 'none';
+            clearInterval(timerInterval);
+            spawnBalls();
+            startTimer();
+        }
+
+        function drawPockets() {
+            pockets.forEach(pocket => {
+                ctx.beginPath();
+                ctx.arc(pocket.x, pocket.y, pocket.radius, 0, Math.PI * 2);
+                ctx.fillStyle = "#111827";
+                ctx.fill();
+                ctx.strokeStyle = "#4b5563";
+                ctx.lineWidth = 3;
+                ctx.stroke();
+                ctx.closePath();
+            });
+        }
+
+        function gameLoop() {
+            balls.forEach(b => b.update());
+            handleBallCollisions();
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawPockets();
+            balls.forEach(b => b.draw());
+
+            if (isDragging && gameActive) {
+                let dx = cueBall.x - mouseX;
+                let dy = cueBall.y - mouseY;
+                let angle = Math.atan2(dy, dx);
+                let powerLength = Math.min(Math.hypot(dx, dy), 130);
+
+                ctx.strokeStyle = "rgba(255, 255, 255, 0.6)";
+                ctx.lineWidth = 2;
+                ctx.setLineDash([6, 4]);
+                ctx.beginPath();
+                ctx.moveTo(cueBall.x, cueBall.y);
+                ctx.lineTo(cueBall.x + Math.cos(angle) * powerLength * 1.5, cueBall.y + Math.sin(angle) * powerLength * 1.5);
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                ctx.strokeStyle = "#d97706";
+                ctx.lineWidth = 4;
+                ctx.beginPath();
+                ctx.moveTo(cueBall.x, cueBall.y);
+                ctx.lineTo(cueBall.x - Math.cos(angle) * powerLength, cueBall.y - Math.sin(angle) * powerLength);
+                ctx.stroke();
+            }
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        spawnBalls();
+        startTimer();
+        gameLoop();
+    </script>
+</body>
+</html>
